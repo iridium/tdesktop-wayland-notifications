@@ -1,0 +1,48 @@
+# tdesktop-wayland-notifications
+
+> [!NOTE]
+> This patch was written by an LLM (Claude), directed and tested by a human.
+
+A patch for Telegram Desktop that makes its own notification popups work on Wayland, the way they do on Windows and X11.
+
+Upstream forces system notifications on Wayland because apps can't position their own windows there ([tdesktop#28820](https://github.com/telegramdesktop/tdesktop/issues/28820)). Forcing custom notifications through the experimental settings puts them in the middle of the screen.
+
+- **Popups appear in your chosen corner**, on the monitor Telegram is on, and stay clear of panels.
+- **Popups wait for you.** If you're away when a message arrives, the popup stays until you next move the mouse or press a key. Idle inhibitors from games and video players are ignored.
+- **The "Use native notifications" setting comes back** on Wayland.
+
+Tested on KDE Plasma (Wayland). Other compositors with `zwlr_layer_shell_v1` (Hyprland, Sway, …) should work. GNOME has no layer-shell, so it falls back to system notifications as before.
+
+## Install (Arch)
+
+```bash
+git clone https://github.com/iridium/tdesktop-wayland-notifications
+cd tdesktop-wayland-notifications
+makepkg -si
+```
+
+This replaces the `telegram-desktop` package. It's Arch's own PKGBUILD with the patch applied, so it builds Telegram and tdlib from source.
+
+Then in Telegram: Settings → Notifications, turn off **Use native notifications**.
+
+On other distros, apply the patch to the release tarball and build as usual. You'll need `layer-shell-qt` and `wayland-client` development files:
+
+```bash
+patch -Np1 -d tdesktop-7.2.9-full -i wayland-notifications.patch
+```
+
+## How it works
+
+- Each popup becomes a `wlr-layer-shell` surface via [layer-shell-qt](https://invent.kde.org/plasma/layer-shell-qt), anchored to the nearest screen corner, with margins computed from where Telegram would have placed it. It takes keyboard focus only when clicked, for the reply field.
+- Idle detection uses `ext-idle-notify-v1`'s input idle notification (v2), which also makes Telegram's online/away status more accurate on Wayland. Previously only X11 and GNOME were supported.
+- Popups skip `setWindowOpacity()` on Wayland, which Qt doesn't support there and only logs warnings for. Your compositor's open/close animation is used instead of Telegram's fade.
+
+Layer-shell support is optional at build time. Without `layer-shell-qt`, Telegram builds and behaves like upstream.
+
+## Updating
+
+Bump `pkgver` (and `_td_commit` if Arch's package changed it) in the PKGBUILD and rebuild. If the patch stops applying, it needs rebasing onto the new release.
+
+## License
+
+GPL-3.0-or-later with the OpenSSL exception, same as Telegram Desktop.

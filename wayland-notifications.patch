@@ -1,0 +1,775 @@
+Telegram-style notifications on Wayland via wlr-layer-shell, and
+Wayland idle detection via ext-idle-notify-v1.
+
+This patch was written by an LLM (Claude), directed and tested by a human.
+https://github.com/iridium/tdesktop-wayland-notifications
+
+Applies to tdesktop-7.2.9-full: patch -Np1 -i wayland-notifications.patch
+
+diff --git a/Telegram/CMakeLists.txt b/Telegram/CMakeLists.txt
+index bd2a92d..69ef0c9 100644
+--- a/Telegram/CMakeLists.txt
++++ b/Telegram/CMakeLists.txt
+@@ -2376,6 +2376,21 @@ else()
+         qrc/telegram/bot_webview_shell.qrc
+     )
+ 
++    # Lets custom notifications be placed on Wayland via wlr-layer-shell.
++    find_package(LayerShellQt CONFIG QUIET)
++    find_package(PkgConfig QUIET)
++    if (PkgConfig_FOUND)
++        pkg_check_modules(WAYLAND_CLIENT IMPORTED_TARGET wayland-client)
++    endif()
++    if (LayerShellQt_FOUND AND WAYLAND_CLIENT_FOUND)
++        target_compile_definitions(Telegram PRIVATE TDESKTOP_USE_LAYER_SHELL_QT)
++        target_link_libraries(Telegram
++        PRIVATE
++            LayerShellQt::Interface
++            PkgConfig::WAYLAND_CLIENT
++        )
++    endif()
++
+     include(${cmake_helpers_loc}/external/glib/generate_dbus.cmake)
+     generate_dbus(Telegram org.freedesktop.portal. XdpBackground ${third_party_loc}/xdg-desktop-portal/data/org.freedesktop.portal.Background.xml)
+     generate_dbus(Telegram org.freedesktop.portal. FlatpakPortal ${src_loc}/platform/linux/org.freedesktop.portal.Flatpak.xml)
+diff --git a/Telegram/SourceFiles/platform/linux/notifications_manager_linux.cpp b/Telegram/SourceFiles/platform/linux/notifications_manager_linux.cpp
+index a229510..f7e8dde 100644
+--- a/Telegram/SourceFiles/platform/linux/notifications_manager_linux.cpp
++++ b/Telegram/SourceFiles/platform/linux/notifications_manager_linux.cpp
+@@ -29,11 +29,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include <QtCore/QBuffer>
+ #include <QtCore/QVersionNumber>
+ #include <QtGui/QGuiApplication>
++#include <QtGui/QScreen>
++#include <QtGui/QWindow>
++#include <QtWidgets/QWidget>
++
++#ifdef TDESKTOP_USE_LAYER_SHELL_QT
++#include <LayerShellQt/window.h>
++#include <wayland-client.h>
++#endif // TDESKTOP_USE_LAYER_SHELL_QT
+ 
+ #include <ksandbox.h>
+ 
+ #include <xdgnotifications/xdgnotifications.hpp>
+ 
++#include <cstring>
+ #include <dlfcn.h>
+ 
+ namespace Platform {
+@@ -150,6 +159,68 @@ bool UseGNotification() {
+ 	return KSandbox::isFlatpak() && !ServiceRegistered;
+ }
+ 
++
++#ifdef TDESKTOP_USE_LAYER_SHELL_QT
++[[nodiscard]] bool HasLayerShell() {
++	static auto result = false;
++	static auto resolved = false;
++	if (resolved || !qApp || !IsWayland()) {
++		return result;
++	}
++	using namespace QNativeInterface;
++	const auto native = qApp->nativeInterface<QWaylandApplication>();
++	const auto display = native ? native->display() : nullptr;
++	if (!display) {
++		return result;
++	}
++	resolved = true;
++
++	static const auto listener = wl_registry_listener{
++		.global = [](
++				void *data,
++				wl_registry *,
++				uint32_t,
++				const char *interface,
++				uint32_t) {
++			if (interface && !strcmp(interface, "zwlr_layer_shell_v1")) {
++				*static_cast<bool*>(data) = true;
++			}
++		},
++		.global_remove = [](void *, wl_registry *, uint32_t) {},
++	};
++	const auto queue = wl_display_create_queue(display);
++	const auto wrapper = static_cast<wl_display*>(
++		wl_proxy_create_wrapper(display));
++	wl_proxy_set_queue(reinterpret_cast<wl_proxy*>(wrapper), queue);
++	const auto registry = wl_display_get_registry(wrapper);
++	wl_registry_add_listener(registry, &listener, &result);
++	wl_display_roundtrip_queue(display, queue);
++	wl_registry_destroy(registry);
++	wl_proxy_wrapper_destroy(wrapper);
++	wl_event_queue_destroy(queue);
++	return result;
++}
++
++[[nodiscard]] LayerShellQt::Window *LayerWindow(not_null<QWidget*> widget) {
++	const auto window = widget->windowHandle();
++	return window
++		? window->findChild<LayerShellQt::Window*>(
++			QString(),
++			Qt::FindDirectChildrenOnly)
++		: nullptr;
++}
++#endif // TDESKTOP_USE_LAYER_SHELL_QT
++
++// Wayland doesn't let clients position their windows,
++// but wlr-layer-shell lets anchor surfaces to screen edges.
++[[nodiscard]] bool LayerShellSupported() {
++#ifdef TDESKTOP_USE_LAYER_SHELL_QT
++	return HasLayerShell();
++#else // TDESKTOP_USE_LAYER_SHELL_QT
++	return false;
++#endif // !TDESKTOP_USE_LAYER_SHELL_QT
++}
++
+ } // namespace
+ 
+ class Manager::Private : public base::has_weak_ptr {
+@@ -205,6 +276,68 @@ bool WaitForInputForCustom() {
+ 	return true;
+ }
+ 
++void InitCustomWidget(not_null<QWidget*> widget, QRect display) {
++#ifdef TDESKTOP_USE_LAYER_SHELL_QT
++	if (!LayerShellSupported()) {
++		return;
++	}
++	widget->createWinId();
++	const auto window = widget->windowHandle();
++	if (!window) {
++		return;
++	}
++	const auto layer = LayerShellQt::Window::get(window);
++	layer->setLayer(LayerShellQt::Window::LayerOverlay);
++	layer->setScope(u"notification"_q);
++	layer->setExclusiveZone(0);
++	// Take keyboard focus only when clicked, for the quick reply field.
++	layer->setKeyboardInteractivity(
++		LayerShellQt::Window::KeyboardInteractivityOnDemand);
++	layer->setActivateOnShow(false);
++	if (const auto screen = QGuiApplication::screenAt(display.center())) {
++		window->setScreen(screen);
++		layer->setScreen(screen);
++	}
++#endif // TDESKTOP_USE_LAYER_SHELL_QT
++}
++
++bool PlaceCustomWidget(not_null<QWidget*> widget, QRect geometry) {
++#ifdef TDESKTOP_USE_LAYER_SHELL_QT
++	const auto layer = LayerWindow(widget);
++	if (!layer) {
++		return false;
++	}
++	const auto screen = layer->screen()
++		? layer->screen()
++		: widget->windowHandle()->screen();
++	if (!screen) {
++		return true;
++	}
++	// Anchor to the closest screen corner, so that the notification
++	// stays in place when its size changes or the screen is resized.
++	// The compositor already keeps layer surfaces off the panels.
++	using Anchor = LayerShellQt::Window::Anchor;
++	const auto area = screen->availableGeometry();
++	const auto left = geometry.x() - area.x();
++	const auto top = geometry.y() - area.y();
++	const auto right = area.x() + area.width() - geometry.x() - geometry.width();
++	const auto bottom = area.y() + area.height() - geometry.y() - geometry.height();
++	const auto toLeft = (left <= right);
++	const auto toTop = (top <= bottom);
++	layer->setAnchors(LayerShellQt::Window::Anchors()
++		| (toLeft ? Anchor::AnchorLeft : Anchor::AnchorRight)
++		| (toTop ? Anchor::AnchorTop : Anchor::AnchorBottom));
++	layer->setMargins(QMargins(
++		toLeft ? left : 0,
++		toTop ? top : 0,
++		toLeft ? 0 : right,
++		toTop ? 0 : bottom));
++	return true;
++#else // TDESKTOP_USE_LAYER_SHELL_QT
++	return false;
++#endif // !TDESKTOP_USE_LAYER_SHELL_QT
++}
++
+ bool Supported() {
+ 	return ServiceRegistered || UseGNotification();
+ }
+@@ -212,7 +345,8 @@ bool Supported() {
+ bool Enforced() {
+ 	// Wayland doesn't support positioning
+ 	// and custom notifications don't work here
+-	return IsWayland()
++	// unless we can place them as layer-shell surfaces
++	return (IsWayland() && !LayerShellSupported())
+ 		|| (Gio::Application::get_default() && OptionGNotification().value());
+ }
+ 
+diff --git a/Telegram/SourceFiles/platform/mac/notifications_manager_mac.mm b/Telegram/SourceFiles/platform/mac/notifications_manager_mac.mm
+index 23b9447..ca783b6 100644
+--- a/Telegram/SourceFiles/platform/mac/notifications_manager_mac.mm
++++ b/Telegram/SourceFiles/platform/mac/notifications_manager_mac.mm
+@@ -223,6 +223,13 @@ bool WaitForInputForCustom() {
+ 	return true;
+ }
+ 
++void InitCustomWidget(not_null<QWidget*> widget, QRect display) {
++}
++
++bool PlaceCustomWidget(not_null<QWidget*> widget, QRect geometry) {
++	return false;
++}
++
+ bool Supported() {
+ 	return true;
+ }
+diff --git a/Telegram/SourceFiles/platform/platform_notifications_manager.h b/Telegram/SourceFiles/platform/platform_notifications_manager.h
+index da41f60..d8ece45 100644
+--- a/Telegram/SourceFiles/platform/platform_notifications_manager.h
++++ b/Telegram/SourceFiles/platform/platform_notifications_manager.h
+@@ -17,6 +17,13 @@ void MaybePlaySoundForCustom(Fn<void()> playSound);
+ void MaybeFlashBounceForCustom(Fn<void()> flashBounce);
+ [[nodiscard]] bool WaitForInputForCustom();
+ 
++// Called for each custom notification window before it is shown.
++void InitCustomWidget(not_null<QWidget*> widget, QRect display);
++// Returns false if the window should be simply moved to geometry.topLeft().
++[[nodiscard]] bool PlaceCustomWidget(
++	not_null<QWidget*> widget,
++	QRect geometry);
++
+ [[nodiscard]] bool Supported();
+ [[nodiscard]] bool Enforced();
+ [[nodiscard]] bool ByDefault();
+diff --git a/Telegram/SourceFiles/platform/win/notifications_manager_win.cpp b/Telegram/SourceFiles/platform/win/notifications_manager_win.cpp
+index c3f36b5..ae1e80e 100644
+--- a/Telegram/SourceFiles/platform/win/notifications_manager_win.cpp
++++ b/Telegram/SourceFiles/platform/win/notifications_manager_win.cpp
+@@ -400,6 +400,13 @@ bool WaitForInputForCustom() {
+ 	return UserNotificationState != QUNS_BUSY;
+ }
+ 
++void InitCustomWidget(not_null<QWidget*> widget, QRect display) {
++}
++
++bool PlaceCustomWidget(not_null<QWidget*> widget, QRect geometry) {
++	return false;
++}
++
+ bool Supported() {
+ 	if (!Checked) {
+ 		Checked = true;
+diff --git a/Telegram/SourceFiles/settings/sections/settings_notifications.cpp b/Telegram/SourceFiles/settings/sections/settings_notifications.cpp
+index a16c3ee..b552f94 100644
+--- a/Telegram/SourceFiles/settings/sections/settings_notifications.cpp
++++ b/Telegram/SourceFiles/settings/sections/settings_notifications.cpp
+@@ -77,7 +77,11 @@ int CurrentNotificationsCount() {
+ 
+ class NotificationsCount::SampleWidget : public QWidget {
+ public:
+-	SampleWidget(NotificationsCount *owner, const QPixmap &cache);
++	SampleWidget(
++		NotificationsCount *owner,
++		const QPixmap &cache,
++		QPoint position,
++		QRect display);
+ 
+ 	void detach();
+ 	void showFast();
+@@ -89,6 +93,7 @@ protected:
+ private:
+ 	void startAnimation();
+ 	void animationCallback();
++	void setOpacity(float64 opacity);
+ 
+ 	NotificationsCount *_owner;
+ 	QPixmap _cache;
+@@ -575,8 +580,11 @@ void NotificationsCount::setOverCorner(ScreenCorner corner) {
+ 		auto sampleLeft = (isLeft == rtl()) ? (r.x() + r.width() - st::notifyWidth - st::notifyDeltaX) : (r.x() + st::notifyDeltaX);
+ 		auto sampleTop = isTop ? (r.y() + st::notifyDeltaY) : (r.y() + r.height() - st::notifyDeltaY - st::notifyMinHeight);
+ 		for (int i = samplesLeave; i != samplesNeeded; ++i) {
+-			auto widget = std::make_unique<SampleWidget>(this, _notificationSampleLarge);
+-			widget->move(sampleLeft, sampleTop + (isTop ? 1 : -1) * i * (st::notifyMinHeight + st::notifyDeltaY));
++			auto widget = std::make_unique<SampleWidget>(
++				this,
++				_notificationSampleLarge,
++				QPoint(sampleLeft, sampleTop + (isTop ? 1 : -1) * i * (st::notifyMinHeight + st::notifyDeltaY)),
++				r);
+ 			widget->showFast();
+ 			samples.push_back(widget.release());
+ 		}
+@@ -636,7 +644,9 @@ NotificationsCount::~NotificationsCount() {
+ 
+ NotificationsCount::SampleWidget::SampleWidget(
+ 	NotificationsCount *owner,
+-	const QPixmap &cache)
++	const QPixmap &cache,
++	QPoint position,
++	QRect display)
+ : _owner(owner)
+ , _cache(cache) {
+ 	setFixedSize(
+@@ -652,10 +662,23 @@ NotificationsCount::SampleWidget::SampleWidget(
+ 	setAttribute(Qt::WA_TransparentForMouseEvents);
+ 	setAttribute(Qt::WA_OpaquePaintEvent);
+ 
+-	setWindowOpacity(0.);
++	Platform::Notifications::InitCustomWidget(this, display);
++	if (!Platform::Notifications::PlaceCustomWidget(
++			this,
++			QRect(position, size()))) {
++		move(position);
++	}
++	setOpacity(0.);
+ 	show();
+ }
+ 
++void NotificationsCount::SampleWidget::setOpacity(float64 opacity) {
++	if (!::Platform::IsWayland()) {
++		// Not supported by Qt on Wayland, it only spams warnings.
++		setWindowOpacity(opacity);
++	}
++}
++
+ void NotificationsCount::SampleWidget::detach() {
+ 	_owner = nullptr;
+ 	hideFast();
+@@ -685,7 +708,7 @@ void NotificationsCount::SampleWidget::startAnimation() {
+ }
+ 
+ void NotificationsCount::SampleWidget::animationCallback() {
+-	setWindowOpacity(_opacity.value(_hiding ? 0. : 1.));
++	setOpacity(_opacity.value(_hiding ? 0. : 1.));
+ 	if (!_opacity.animating() && _hiding) {
+ 		if (_owner) {
+ 			_owner->removeSample(this);
+diff --git a/Telegram/SourceFiles/window/notifications_manager_default.cpp b/Telegram/SourceFiles/window/notifications_manager_default.cpp
+index 12f5bf9..052e9de 100644
+--- a/Telegram/SourceFiles/window/notifications_manager_default.cpp
++++ b/Telegram/SourceFiles/window/notifications_manager_default.cpp
+@@ -37,6 +37,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ #include "history/history.h"
+ #include "history/history_item.h"
+ #include "history/view/history_view_item_preview.h"
++#include "base/platform/base_platform_info.h"
+ #include "base/platform/base_platform_last_input.h"
+ #include "base/call_delayed.h"
+ #include "styles/style_dialogs.h"
+@@ -494,7 +495,7 @@ Widget::Widget(
+ , _shiftAnimation([=](crl::time now) {
+ 	return shiftAnimationCallback(now);
+ }) {
+-	setWindowOpacity(0.);
++	setOpacity(0.);
+ 
+ 	setWindowFlags(Qt::WindowFlags(Qt::FramelessWindowHint)
+ 		| Qt::WindowStaysOnTopHint
+@@ -505,6 +506,9 @@ Widget::Widget(
+ 	setAttribute(Qt::WA_OpaquePaintEvent);
+ 
+ 	Ui::Platform::InitOnTopPanel(this);
++	Platform::Notifications::InitCustomWidget(
++		this,
++		NotificationDisplayRect(Core::App().activePrimaryWindow()));
+ 
+ 	_a_opacity.start([this] { opacityAnimationCallback(); }, 0., 1., st::notifyFastAnim);
+ }
+@@ -576,7 +580,14 @@ void Widget::hideAnimated(float64 duration, const anim::transition &func) {
+ }
+ 
+ void Widget::updateOpacity() {
+-	setWindowOpacity(_a_opacity.value(_hiding ? 0. : 1.) * _manager->demoMasterOpacity());
++	setOpacity(_a_opacity.value(_hiding ? 0. : 1.) * _manager->demoMasterOpacity());
++}
++
++void Widget::setOpacity(float64 opacity) {
++	if (!::Platform::IsWayland()) {
++		// Not supported by Qt on Wayland, it only spams warnings.
++		setWindowOpacity(opacity);
++	}
+ }
+ 
+ void Widget::changeShift(int top) {
+@@ -598,18 +609,25 @@ void Widget::addToHeight(int add) {
+ }
+ 
+ void Widget::updateGeometry(int x, int y, int width, int height) {
+-	move(x, y);
+ 	setFixedSize(width, height);
++	moveTo(QPoint(x, y));
+ 	update();
+ }
+ 
++void Widget::moveTo(QPoint position) {
++	const auto geometry = QRect(position, size());
++	if (!Platform::Notifications::PlaceCustomWidget(this, geometry)) {
++		move(position);
++	}
++}
++
+ void Widget::addToShift(int add) {
+ 	_shift.add(add);
+ 	moveByShift();
+ }
+ 
+ void Widget::moveByShift() {
+-	move(computePosition(height()));
++	moveTo(computePosition(height()));
+ }
+ 
+ QPoint Widget::computePosition(int height) const {
+diff --git a/Telegram/SourceFiles/window/notifications_manager_default.h b/Telegram/SourceFiles/window/notifications_manager_default.h
+index 7a23561..119377d 100644
+--- a/Telegram/SourceFiles/window/notifications_manager_default.h
++++ b/Telegram/SourceFiles/window/notifications_manager_default.h
+@@ -174,6 +174,8 @@ protected:
+ private:
+ 	void opacityAnimationCallback();
+ 	void moveByShift();
++	void moveTo(QPoint position);
++	void setOpacity(float64 opacity);
+ 	void hideAnimated(float64 duration, const anim::transition &func);
+ 	bool shiftAnimationCallback(crl::time now);
+ 
+diff --git a/Telegram/lib_base/base/platform/linux/base_last_input_linux.cpp b/Telegram/lib_base/base/platform/linux/base_last_input_linux.cpp
+index e64c307..05bd1af 100644
+--- a/Telegram/lib_base/base/platform/linux/base_last_input_linux.cpp
++++ b/Telegram/lib_base/base/platform/linux/base_last_input_linux.cpp
+@@ -7,8 +7,14 @@
+ #include "base/platform/linux/base_last_input_linux.h"
+ 
+ #include "base/debug_log.h"
++#include "base/platform/base_platform_info.h"
++#include "base/platform/linux/base_linux_library.h"
+ #include "base/platform/linux/base_linux_xcb_utilities.h"
+ 
++#include <QtCore/QThread>
++#include <QtGui/QGuiApplication>
++
++#include <cstring>
+ #include <sys/uio.h>
+ 
+ // Declarations from the xcb-screensaver headers (X11 license), so that
+@@ -39,6 +45,307 @@ typedef struct xcb_screensaver_query_info_reply_t {
+ 
+ #include <mutteridlemonitor/mutteridlemonitor.hpp>
+ 
++#if defined QT_FEATURE_wayland && QT_CONFIG(wayland)
++
++// Minimal ext-idle-notify-v1 client, talking to the compositor through
++// Qt's own wl_display, with libwayland-client loaded at runtime.
++extern "C" {
++
++struct wl_proxy;
++struct wl_display;
++struct wl_registry;
++struct wl_seat;
++
++struct wl_message {
++	const char *name;
++	const char *signature;
++	const struct wl_interface **types;
++};
++
++struct wl_interface {
++	const char *name;
++	int version;
++	int method_count;
++	const struct wl_message *methods;
++	int event_count;
++	const struct wl_message *events;
++};
++
++struct wl_registry_listener {
++	void (*global)(
++		void *data,
++		struct wl_registry *registry,
++		uint32_t name,
++		const char *interface,
++		uint32_t version);
++	void (*global_remove)(
++		void *data,
++		struct wl_registry *registry,
++		uint32_t name);
++};
++
++struct ext_idle_notifier_v1;
++struct ext_idle_notification_v1;
++
++struct ext_idle_notification_v1_listener {
++	void (*idled)(void *data, struct ext_idle_notification_v1 *notification);
++	void (*resumed)(
++		void *data,
++		struct ext_idle_notification_v1 *notification);
++};
++
++} // extern "C"
++
++namespace base::Platform {
++namespace {
++
++// Idle timeout requested from the compositor. The last input time is
++// known with this precision, so it is kept small.
++constexpr auto kWaylandIdleTimeout = crl::time(1000);
++constexpr auto kWaylandMarshalFlagDestroy = uint32_t(1);
++
++extern const struct wl_interface kIdleNotificationInterface;
++
++const struct wl_interface *kIdleNotifierRequestTypes[] = {
++	&kIdleNotificationInterface,
++	nullptr,
++	nullptr,
++};
++
++const auto kIdleNotifierRequests = std::array{
++	wl_message{ "destroy", "", nullptr },
++	wl_message{ "get_idle_notification", "nuo", kIdleNotifierRequestTypes },
++	wl_message{
++		"get_input_idle_notification",
++		"2nuo",
++		kIdleNotifierRequestTypes,
++	},
++};
++
++const auto kIdleNotificationRequests = std::array{
++	wl_message{ "destroy", "", nullptr },
++};
++
++const auto kIdleNotificationEvents = std::array{
++	wl_message{ "idled", "", nullptr },
++	wl_message{ "resumed", "", nullptr },
++};
++
++const struct wl_interface kIdleNotifierInterface = {
++	"ext_idle_notifier_v1",
++	2,
++	int(kIdleNotifierRequests.size()),
++	kIdleNotifierRequests.data(),
++	0,
++	nullptr,
++};
++
++const struct wl_interface kIdleNotificationInterface = {
++	"ext_idle_notification_v1",
++	2,
++	int(kIdleNotificationRequests.size()),
++	kIdleNotificationRequests.data(),
++	int(kIdleNotificationEvents.size()),
++	kIdleNotificationEvents.data(),
++};
++
++struct WaylandSymbols {
++	struct wl_proxy *(*proxyMarshalFlags)(
++		struct wl_proxy *proxy,
++		uint32_t opcode,
++		const struct wl_interface *interface,
++		uint32_t version,
++		uint32_t flags,
++		...) = nullptr;
++	int (*proxyAddListener)(
++		struct wl_proxy *proxy,
++		void (**implementation)(void),
++		void *data) = nullptr;
++	void (*proxyDestroy)(struct wl_proxy *proxy) = nullptr;
++	uint32_t (*proxyGetVersion)(struct wl_proxy *proxy) = nullptr;
++	int (*displayRoundtrip)(struct wl_display *display) = nullptr;
++	const struct wl_interface *registryInterface = nullptr;
++
++	[[nodiscard]] explicit operator bool() const {
++		return proxyMarshalFlags
++			&& proxyAddListener
++			&& proxyDestroy
++			&& proxyGetVersion
++			&& displayRoundtrip
++			&& registryInterface;
++	}
++};
++
++[[nodiscard]] const WaylandSymbols *Wayland() {
++	static const auto result = [] {
++		auto result = WaylandSymbols();
++		if (const auto lib = LoadLibrary(
++				"libwayland-client.so.0",
++				RTLD_NODELETE)) {
++			LoadSymbol(lib, "wl_proxy_marshal_flags", result.proxyMarshalFlags);
++			LoadSymbol(lib, "wl_proxy_add_listener", result.proxyAddListener);
++			LoadSymbol(lib, "wl_proxy_destroy", result.proxyDestroy);
++			LoadSymbol(lib, "wl_proxy_get_version", result.proxyGetVersion);
++			LoadSymbol(lib, "wl_display_roundtrip", result.displayRoundtrip);
++			LoadSymbol(lib, "wl_registry_interface", result.registryInterface);
++		}
++		return result;
++	}();
++
++	return result ? &result : nullptr;
++}
++
++struct WaylandIdleState {
++	bool idle = false;
++	crl::time idleSince = 0;
++	crl::time activeSince = 0;
++};
++
++WaylandIdleState WaylandIdle;
++
++struct WaylandRegistryResult {
++	uint32_t name = 0;
++	uint32_t version = 0;
++};
++
++void WaylandRegistryGlobal(
++		void *data,
++		struct wl_registry *,
++		uint32_t name,
++		const char *interface,
++		uint32_t version) {
++	if (!interface || std::strcmp(interface, kIdleNotifierInterface.name)) {
++		return;
++	}
++	const auto result = static_cast<WaylandRegistryResult*>(data);
++	result->name = name;
++	result->version = std::min<uint32_t>(
++		version,
++		kIdleNotifierInterface.version);
++}
++
++void WaylandRegistryGlobalRemove(void *, struct wl_registry *, uint32_t) {
++}
++
++auto kWaylandRegistryListener = wl_registry_listener{
++	&WaylandRegistryGlobal,
++	&WaylandRegistryGlobalRemove,
++};
++
++void WaylandIdled(void *, struct ext_idle_notification_v1 *) {
++	WaylandIdle.idle = true;
++	WaylandIdle.idleSince = crl::now() - kWaylandIdleTimeout;
++}
++
++void WaylandResumed(void *, struct ext_idle_notification_v1 *) {
++	WaylandIdle.idle = false;
++	WaylandIdle.activeSince = crl::now();
++}
++
++auto kIdleNotificationListener = ext_idle_notification_v1_listener{
++	&WaylandIdled,
++	&WaylandResumed,
++};
++
++[[nodiscard]] bool WaylandIdleInit() {
++	if (!::Platform::IsWayland()) {
++		return false;
++	}
++	using namespace QNativeInterface;
++	const auto native = qApp->nativeInterface<QWaylandApplication>();
++	const auto wayland = Wayland();
++	if (!native || !wayland || !native->display() || !native->seat()) {
++		return false;
++	}
++	const auto display = native->display();
++	const auto displayProxy = reinterpret_cast<wl_proxy*>(display);
++	const auto registry = wayland->proxyMarshalFlags(
++		displayProxy,
++		1, // wl_display.get_registry
++		wayland->registryInterface,
++		wayland->proxyGetVersion(displayProxy),
++		0,
++		nullptr);
++	if (!registry) {
++		return false;
++	}
++	auto result = WaylandRegistryResult();
++	wayland->proxyAddListener(
++		registry,
++		reinterpret_cast<void(**)(void)>(&kWaylandRegistryListener),
++		&result);
++	wayland->displayRoundtrip(display);
++
++	auto notification = (wl_proxy*)nullptr;
++	if (result.name && result.version) {
++		const auto notifier = wayland->proxyMarshalFlags(
++			registry,
++			0, // wl_registry.bind
++			&kIdleNotifierInterface,
++			result.version,
++			0,
++			result.name,
++			kIdleNotifierInterface.name,
++			result.version,
++			nullptr);
++		if (notifier) {
++			// get_input_idle_notification ignores idle inhibitors,
++			// like a playing video, we're interested in real input only.
++			notification = wayland->proxyMarshalFlags(
++				notifier,
++				(result.version >= 2) ? 2 : 1,
++				&kIdleNotificationInterface,
++				result.version,
++				0,
++				nullptr,
++				uint32_t(kWaylandIdleTimeout),
++				native->seat());
++			// The notification outlives the notifier just fine.
++			wayland->proxyMarshalFlags(
++				notifier,
++				0, // ext_idle_notifier_v1.destroy
++				nullptr,
++				result.version,
++				kWaylandMarshalFlagDestroy);
++		}
++	}
++	wayland->proxyDestroy(registry);
++	if (!notification) {
++		return false;
++	}
++	wayland->proxyAddListener(
++		notification,
++		reinterpret_cast<void(**)(void)>(&kIdleNotificationListener),
++		nullptr);
++	WaylandIdle.activeSince = crl::now();
++	return true;
++}
++
++std::optional<crl::time> WaylandLastUserInputTime() {
++	// Wayland objects are set up on the main thread, once Qt is connected.
++	static auto Supported = std::optional<bool>();
++	if (!Supported) {
++		if (!qApp || QThread::currentThread() != qApp->thread()) {
++			return std::nullopt;
++		}
++		Supported = WaylandIdleInit();
++	}
++	if (!*Supported) {
++		return std::nullopt;
++	}
++	// While active the last input was at most kWaylandIdleTimeout ago.
++	return WaylandIdle.idle
++		? WaylandIdle.idleSince
++		: std::max(
++			WaylandIdle.activeSince,
++			crl::now() - kWaylandIdleTimeout);
++}
++
++} // namespace
++} // namespace base::Platform
++
++#endif // wayland
++
+ namespace base::Platform {
+ namespace {
+ 
+@@ -130,6 +437,14 @@ std::optional<crl::time> MutterDBusLastUserInputTime() {
+ } // namespace
+ 
+ std::optional<crl::time> LastUserInputTime() {
++#if defined QT_FEATURE_wayland && QT_CONFIG(wayland)
++	// Xwayland only knows about input sent to X11 clients.
++	const auto waylandResult = WaylandLastUserInputTime();
++	if (waylandResult.has_value()) {
++		return waylandResult;
++	}
++#endif // wayland
++
+ 	const auto xcbResult = XCBLastUserInputTime();
+ 	if (xcbResult.has_value()) {
+ 		return xcbResult;

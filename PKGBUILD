@@ -1,0 +1,123 @@
+# Based on the Arch Linux telegram-desktop package by
+# Sven-Hendrik Haase <svenstaro@archlinux.org> and hexchain <i@hexchain.org>
+
+pkgname=telegram-desktop-wayland-notifications
+_pkgname=telegram-desktop
+pkgver=7.2.9
+_td_commit=bc9c263e2bfee06aaab41e82db51a103376030bc
+pkgrel=1
+pkgdesc='Official Telegram Desktop client, with an LLM-written patch for Telegram-style notifications on Wayland'
+arch=('x86_64')
+url="https://github.com/iridium/tdesktop-wayland-notifications"
+license=('GPL-3.0-or-later WITH OpenSSL-exception')
+depends=(
+  'abseil-cpp'
+  'ada'
+  'ffmpeg'
+  'glib2'
+  'glibc'
+  'hicolor-icon-theme'
+  'hunspell'
+  'kcoreaddons'
+  'layer-shell-qt'
+  'libavif'
+  'libfido2'
+  'libgcc'
+  'libheif'
+  'libjpeg-turbo'
+  'libjxl'
+  'libpipewire'
+  'libsrtp'
+  'libstdc++'
+  'libvpx'
+  'libxcb'
+  'libxcomposite'
+  'libxdamage'
+  'libxext'
+  'libxfixes'
+  'libxkbcommon'
+  'libxrandr'
+  'libxtst'
+  'lz4'
+  'minizip'
+  'openal'
+  'openh264'
+  'openssl'
+  'opus'
+  'pipewire'
+  'qt6-base'
+  'qt6-declarative'
+  'qt6-imageformats'
+  'qt6-svg'
+  'qt6-wayland'
+  'rnnoise'
+  'tlottie'
+  'wayland'
+  'xxhash'
+  'zlib'
+)
+makedepends=(
+  'boost'
+  'boost-libs'
+  'cmake'
+  'git'
+  'glib2-devel'
+  'gobject-introspection'
+  'qt6-shadertools'
+  'gperf'
+  'libtg_owt'
+  'microsoft-gsl'
+  'ninja'
+  'python'
+  'range-v3'
+  'tl-expected'
+  'vulkan-headers'
+)
+provides=("${_pkgname}=${pkgver}")
+conflicts=("${_pkgname}")
+optdepends=(
+  'geoclue: geoinformation support'
+  'crow-translate: translation provider'
+  'webkit2gtk-4.1: embedded browser features provided by webkit2gtk-4.1 (gtk3)'
+  'webkitgtk-6.0: embedded browser features provided by webkitgtk-6.0 (gtk4)'
+  'xdg-desktop-portal: desktop integration'
+)
+source=(
+  "https://github.com/telegramdesktop/tdesktop/releases/download/v${pkgver}/tdesktop-${pkgver}-full.tar.gz"
+  "git+https://github.com/tdlib/td.git#commit=${_td_commit}"
+  "wayland-notifications.patch"
+)
+sha512sums=('4d0f18292fe33f204fea0bd0167efb3376b424ede6a1ce4fd3660955035a3ae7033343a86dfa585401e63747fa11676d5ce87355e785638014e3e90caf4e9195'
+            '12d3b77dbb2a7b7deaef0e173626b9d16acfbdde5b1df4bd58a70a7541a5d8032f25ecbc14604b0e47aa3d6d76704c56409d432717412c6046efebd0ab6180f1'
+            '06d29ed316125f74fe371c648e89043e41ce1526bd2982e8cf8eca778f9abd687cf99b6215a4df16bae17cbd0946b86553abdbb7d30564f1ddd6e9753bd3faad')
+
+prepare() {
+  patch -Np1 -d "tdesktop-${pkgver}-full" -i "${srcdir}/wayland-notifications.patch"
+}
+
+build() {
+  cmake -S td -B td/build \
+    -DCMAKE_BUILD_TYPE=None \
+    -DCMAKE_INSTALL_PREFIX="$PWD/td/install" \
+    -Wno-dev \
+    -DTD_E2E_ONLY=ON
+  cmake --build td/build
+  cmake --install td/build
+
+  # Turns out we're allowed to use the official API key that telegram uses for
+  # their snap builds:
+  # https://github.com/telegramdesktop/tdesktop/blob/8fab9167beb2407c1153930ed03a4badd0c2b59f/snap/snapcraft.yaml#L87-L88
+  # Thanks @primeos!
+  cmake -B build -S tdesktop-$pkgver-full -G Ninja \
+    -DCMAKE_VERBOSE_MAKEFILE=ON \
+    -DCMAKE_INSTALL_PREFIX="/usr" \
+    -Dtde2e_DIR="$PWD/td/install/lib/cmake/tde2e" \
+    -DCMAKE_BUILD_TYPE=None \
+    -DTDESKTOP_API_ID=611335 \
+    -DTDESKTOP_API_HASH=d524b414d21f4d37f08684c1df41ac9c
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+}
