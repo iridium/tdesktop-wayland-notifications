@@ -7,7 +7,7 @@ A patch for Telegram Desktop that makes its own notification popups work on Wayl
 
 Upstream forces system notifications on Wayland because apps can't position their own windows there ([tdesktop#28820](https://github.com/telegramdesktop/tdesktop/issues/28820)). Forcing custom notifications through the experimental settings puts them in the middle of the screen.
 
-- **Popups appear in your chosen corner**, on the monitor Telegram is on, and stay clear of panels.
+- **Popups appear in your chosen corner**, on the monitor Telegram is on, stay clear of panels, and never steal focus.
 - **Popups wait for you.** If you're away when a message arrives, the popup stays until you next move the mouse or press a key. Idle inhibitors from games and video players are ignored.
 - **The "Use native notifications" setting comes back** on Wayland.
 
@@ -33,7 +33,7 @@ patch -Np1 -d tdesktop-7.2.9-full -i wayland-notifications.patch
 
 ## How it works
 
-- Each popup becomes a `wlr-layer-shell` surface via [layer-shell-qt](https://invent.kde.org/plasma/layer-shell-qt), anchored to the nearest screen corner, with margins computed from where Telegram would have placed it. It takes keyboard focus only when clicked, for the reply field.
+- Each popup becomes a `wlr-layer-shell` surface via [layer-shell-qt](https://invent.kde.org/plasma/layer-shell-qt), anchored to the nearest screen corner, with margins computed from where Telegram would have placed it. It never takes keyboard focus, except after you click Reply on it.
 - Idle detection uses `ext-idle-notify-v1`'s input idle notification (v2), which also makes Telegram's online/away status more accurate on Wayland. Previously only X11 and GNOME were supported.
 - Popups skip `setWindowOpacity()` on Wayland, which Qt doesn't support there and only logs warnings for. Your compositor's open/close animation is used instead of Telegram's fade.
 

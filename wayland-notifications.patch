@@ -33,7 +33,7 @@ index bd2a92d..69ef0c9 100644
      generate_dbus(Telegram org.freedesktop.portal. XdpBackground ${third_party_loc}/xdg-desktop-portal/data/org.freedesktop.portal.Background.xml)
      generate_dbus(Telegram org.freedesktop.portal. FlatpakPortal ${src_loc}/platform/linux/org.freedesktop.portal.Flatpak.xml)
 diff --git a/Telegram/SourceFiles/platform/linux/notifications_manager_linux.cpp b/Telegram/SourceFiles/platform/linux/notifications_manager_linux.cpp
-index a229510..f7e8dde 100644
+index a229510..9748a47 100644
 --- a/Telegram/SourceFiles/platform/linux/notifications_manager_linux.cpp
 +++ b/Telegram/SourceFiles/platform/linux/notifications_manager_linux.cpp
 @@ -29,11 +29,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -126,7 +126,7 @@ index a229510..f7e8dde 100644
  } // namespace
  
  class Manager::Private : public base::has_weak_ptr {
-@@ -205,6 +276,68 @@ bool WaitForInputForCustom() {
+@@ -205,6 +276,77 @@ bool WaitForInputForCustom() {
  	return true;
  }
  
@@ -144,9 +144,9 @@ index a229510..f7e8dde 100644
 +	layer->setLayer(LayerShellQt::Window::LayerOverlay);
 +	layer->setScope(u"notification"_q);
 +	layer->setExclusiveZone(0);
-+	// Take keyboard focus only when clicked, for the quick reply field.
++	// Never take keyboard focus, until the quick reply field is shown.
 +	layer->setKeyboardInteractivity(
-+		LayerShellQt::Window::KeyboardInteractivityOnDemand);
++		LayerShellQt::Window::KeyboardInteractivityNone);
 +	layer->setActivateOnShow(false);
 +	if (const auto screen = QGuiApplication::screenAt(display.center())) {
 +		window->setScreen(screen);
@@ -192,10 +192,19 @@ index a229510..f7e8dde 100644
 +#endif // !TDESKTOP_USE_LAYER_SHELL_QT
 +}
 +
++void AllowCustomWidgetFocus(not_null<QWidget*> widget) {
++#ifdef TDESKTOP_USE_LAYER_SHELL_QT
++	if (const auto layer = LayerWindow(widget)) {
++		layer->setKeyboardInteractivity(
++			LayerShellQt::Window::KeyboardInteractivityOnDemand);
++	}
++#endif // TDESKTOP_USE_LAYER_SHELL_QT
++}
++
  bool Supported() {
  	return ServiceRegistered || UseGNotification();
  }
-@@ -212,7 +345,8 @@ bool Supported() {
+@@ -212,7 +354,8 @@ bool Supported() {
  bool Enforced() {
  	// Wayland doesn't support positioning
  	// and custom notifications don't work here
@@ -206,10 +215,10 @@ index a229510..f7e8dde 100644
  }
  
 diff --git a/Telegram/SourceFiles/platform/mac/notifications_manager_mac.mm b/Telegram/SourceFiles/platform/mac/notifications_manager_mac.mm
-index 23b9447..ca783b6 100644
+index 23b9447..2fbe2ae 100644
 --- a/Telegram/SourceFiles/platform/mac/notifications_manager_mac.mm
 +++ b/Telegram/SourceFiles/platform/mac/notifications_manager_mac.mm
-@@ -223,6 +223,13 @@ bool WaitForInputForCustom() {
+@@ -223,6 +223,16 @@ bool WaitForInputForCustom() {
  	return true;
  }
  
@@ -220,14 +229,17 @@ index 23b9447..ca783b6 100644
 +	return false;
 +}
 +
++void AllowCustomWidgetFocus(not_null<QWidget*> widget) {
++}
++
  bool Supported() {
  	return true;
  }
 diff --git a/Telegram/SourceFiles/platform/platform_notifications_manager.h b/Telegram/SourceFiles/platform/platform_notifications_manager.h
-index da41f60..d8ece45 100644
+index da41f60..f70f511 100644
 --- a/Telegram/SourceFiles/platform/platform_notifications_manager.h
 +++ b/Telegram/SourceFiles/platform/platform_notifications_manager.h
-@@ -17,6 +17,13 @@ void MaybePlaySoundForCustom(Fn<void()> playSound);
+@@ -17,6 +17,15 @@ void MaybePlaySoundForCustom(Fn<void()> playSound);
  void MaybeFlashBounceForCustom(Fn<void()> flashBounce);
  [[nodiscard]] bool WaitForInputForCustom();
  
@@ -237,15 +249,17 @@ index da41f60..d8ece45 100644
 +[[nodiscard]] bool PlaceCustomWidget(
 +	not_null<QWidget*> widget,
 +	QRect geometry);
++// Called before activating the window for the quick reply field.
++void AllowCustomWidgetFocus(not_null<QWidget*> widget);
 +
  [[nodiscard]] bool Supported();
  [[nodiscard]] bool Enforced();
  [[nodiscard]] bool ByDefault();
 diff --git a/Telegram/SourceFiles/platform/win/notifications_manager_win.cpp b/Telegram/SourceFiles/platform/win/notifications_manager_win.cpp
-index c3f36b5..ae1e80e 100644
+index c3f36b5..a6d8dbc 100644
 --- a/Telegram/SourceFiles/platform/win/notifications_manager_win.cpp
 +++ b/Telegram/SourceFiles/platform/win/notifications_manager_win.cpp
-@@ -400,6 +400,13 @@ bool WaitForInputForCustom() {
+@@ -400,6 +400,16 @@ bool WaitForInputForCustom() {
  	return UserNotificationState != QUNS_BUSY;
  }
  
@@ -254,6 +268,9 @@ index c3f36b5..ae1e80e 100644
 +
 +bool PlaceCustomWidget(not_null<QWidget*> widget, QRect geometry) {
 +	return false;
++}
++
++void AllowCustomWidgetFocus(not_null<QWidget*> widget) {
 +}
 +
  bool Supported() {
@@ -344,7 +361,7 @@ index a16c3ee..b552f94 100644
  		if (_owner) {
  			_owner->removeSample(this);
 diff --git a/Telegram/SourceFiles/window/notifications_manager_default.cpp b/Telegram/SourceFiles/window/notifications_manager_default.cpp
-index 12f5bf9..052e9de 100644
+index 12f5bf9..acfc3d2 100644
 --- a/Telegram/SourceFiles/window/notifications_manager_default.cpp
 +++ b/Telegram/SourceFiles/window/notifications_manager_default.cpp
 @@ -37,6 +37,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
@@ -418,6 +435,14 @@ index 12f5bf9..052e9de 100644
  }
  
  QPoint Widget::computePosition(int height) const {
+@@ -1096,6 +1114,7 @@ void Notification::showReplyField() {
+ 		return;
+ 	}
+ 	raise();
++	Platform::Notifications::AllowCustomWidgetFocus(this);
+ 	activateWindow();
+ 
+ 	if (_replyArea) {
 diff --git a/Telegram/SourceFiles/window/notifications_manager_default.h b/Telegram/SourceFiles/window/notifications_manager_default.h
 index 7a23561..119377d 100644
 --- a/Telegram/SourceFiles/window/notifications_manager_default.h
