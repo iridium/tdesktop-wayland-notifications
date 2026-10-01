@@ -11,7 +11,7 @@ Upstream forces system notifications on Wayland because apps can't position thei
 - **Popups wait for you.** If you're away when a message arrives, the popup stays until you next move the mouse or press a key. Idle inhibitors from games and video players are ignored.
 - **The "Use native notifications" setting comes back** on Wayland.
 
-Tested on KDE Plasma (Wayland). Other compositors with `zwlr_layer_shell_v1` (Hyprland, Sway, …) should work. GNOME has no layer-shell, so it falls back to system notifications as before.
+Tested on KDE Plasma 6 (Wayland). Other compositors with `zwlr_layer_shell_v1` (Hyprland, Sway, …) should work. GNOME has no layer-shell, so it falls back to system notifications as before.
 
 ## Install (Arch)
 
@@ -23,7 +23,7 @@ makepkg -si
 
 This replaces the `telegram-desktop` package. It's Arch's own PKGBUILD with the patch applied, so it builds Telegram and tdlib from source.
 
-Then in Telegram: Settings → Notifications, turn off **Use native notifications**.
+Then in Telegram: Settings → Notifications, turn off **Use native notifications**. If you'd previously enabled **Force non-native notifications availability** under Settings → Advanced → Experimental settings, it's no longer needed.
 
 On other distros, apply the patch to the release tarball and build as usual. You'll need `layer-shell-qt` and `wayland-client` development files:
 
@@ -39,9 +39,22 @@ patch -Np1 -d tdesktop-7.2.9-full -i wayland-notifications.patch
 
 Layer-shell support is optional at build time. Without `layer-shell-qt`, Telegram builds and behaves like upstream.
 
+## Limitations
+
+- No fade in or out, since Wayland doesn't let Qt set window opacity. Your compositor's own animation is used instead.
+- A popup already on screen stays on its monitor if you move Telegram. The next one follows.
+- While idle detection is active, Telegram knows when you last used the mouse or keyboard to within about a second.
+
 ## Updating
 
-A daily GitHub Action follows Arch's `telegram-desktop` package. When Arch moves to a new release, it checks that the patch still applies and commits the version bump, or opens an issue if the patch needs rebasing. Pull and rebuild to update.
+A daily GitHub Action follows Arch's `telegram-desktop` package. When Arch moves to a new release, it checks that the patch still applies and commits the version bump, or opens an issue if the patch needs rebasing. It doesn't compile Telegram, so a bump that applies cleanly could still fail to build.
+
+To update after a bump:
+
+```bash
+git pull
+makepkg -si
+```
 
 ## License
 
