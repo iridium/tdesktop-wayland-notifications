@@ -4,7 +4,8 @@ Wayland idle detection via ext-idle-notify-v1.
 This patch was written by an LLM (Claude), directed and tested by a human.
 https://github.com/iridium/tdesktop-wayland-notifications
 
-Applies to tdesktop-7.2.9-full: patch -Np1 -i wayland-notifications.patch
+Applies to the tdesktop-<version>-full release tarball:
+patch -Np1 -i wayland-notifications.patch
 
 diff --git a/Telegram/CMakeLists.txt b/Telegram/CMakeLists.txt
 index bd2a92d..69ef0c9 100644

@@ -1,0 +1,41 @@
+name: Follow Arch updates
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Arch's telegram-desktop version
+        id: check
+        run: python3 .github/scripts/check-update.py
+
+      - name: Commit version bump
+        if: steps.check.outputs.result == 'updated'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Update to ${{ steps.check.outputs.version }}"
+          git push
+
+      - name: Report patch conflict
+        if: steps.check.outputs.result == 'conflict'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          title="Patch doesn't apply to $VERSION"
+          if gh issue list --state open --search "in:title \"$title\"" --json title --jq '.[].title' | grep -qxF "$title"; then
+            echo "Issue already open"
+            exit 0
+          fi
+          gh issue create --title "$title" --body "Arch's telegram-desktop moved to $VERSION, but \`wayland-notifications.patch\` no longer applies to the release tarball. It needs rebasing. See the [workflow run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) for the failing hunks."

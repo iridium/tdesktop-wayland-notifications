@@ -41,7 +41,7 @@ Layer-shell support is optional at build time. Without `layer-shell-qt`, Telegra
 
 ## Updating
 
-Bump `pkgver` (and `_td_commit` if Arch's package changed it) in the PKGBUILD and rebuild. If the patch stops applying, it needs rebasing onto the new release.
+A daily GitHub Action follows Arch's `telegram-desktop` package. When Arch moves to a new release, it checks that the patch still applies and commits the version bump, or opens an issue if the patch needs rebasing. Pull and rebuild to update.
 
 ## License
 
