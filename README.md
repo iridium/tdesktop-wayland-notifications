@@ -53,8 +53,10 @@ To update after a bump:
 
 ```bash
 git pull
-makepkg -si
+makepkg -Csi
 ```
+
+`-C` clears the previous build first. Without it, the build fails when the version changes.
 
 ## License
 
