@@ -47,7 +47,7 @@ Layer-shell support is optional at build time. Without `layer-shell-qt`, Telegra
 
 ## Updating
 
-A daily GitHub Action follows Arch's `telegram-desktop` package. When Arch moves to a new release, it checks that the patch still applies and commits the version bump, or opens an issue if the patch needs rebasing. It doesn't compile Telegram, so a bump that applies cleanly could still fail to build.
+A daily GitHub Action follows Arch's `telegram-desktop` package. When Arch changes its package, it regenerates the PKGBUILD from Arch's with this repo's changes on top, checks that the patch still applies, and commits the result. If the patch needs rebasing or Arch's PKGBUILD changed too much to adapt automatically, it opens an issue instead. It doesn't compile Telegram, so a bump that applies cleanly could still fail to build.
 
 To update after a bump:
 

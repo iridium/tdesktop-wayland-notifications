@@ -13,7 +13,7 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check Arch's telegram-desktop version
         id: check
@@ -27,15 +27,24 @@ jobs:
           git commit -am "Update to ${{ steps.check.outputs.version }}"
           git push
 
-      - name: Report patch conflict
-        if: steps.check.outputs.result == 'conflict'
+      - name: Report problem
+        if: steps.check.outputs.result == 'conflict' || steps.check.outputs.result == 'manual'
         env:
           GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ steps.check.outputs.result }}
           VERSION: ${{ steps.check.outputs.version }}
+          REASON: ${{ steps.check.outputs.reason }}
         run: |
-          title="Patch doesn't apply to $VERSION"
-          if gh issue list --state open --search "in:title \"$title\"" --json title --jq '.[].title' | grep -qxF "$title"; then
+          run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ "$RESULT" = conflict ]; then
+            title="Patch doesn't apply to $VERSION"
+            body="Arch's telegram-desktop moved to $VERSION, but \`wayland-notifications.patch\` no longer applies to the release tarball. It needs rebasing. See the [workflow run]($run) for the failing hunks."
+          else
+            title="PKGBUILD needs a manual update for $VERSION"
+            body="Arch's telegram-desktop PKGBUILD changed in a way \`check-update.py\` can't adapt to: $REASON. See the [workflow run]($run)."
+          fi
+          if gh issue list --state open --json title --jq '.[].title' | grep -qxF "$title"; then
             echo "Issue already open"
             exit 0
           fi
-          gh issue create --title "$title" --body "Arch's telegram-desktop moved to $VERSION, but \`wayland-notifications.patch\` no longer applies to the release tarball. It needs rebasing. See the [workflow run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) for the failing hunks."
+          gh issue create --title "$title" --body "$body"
