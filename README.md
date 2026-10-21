@@ -28,7 +28,7 @@ Then in Telegram: Settings → Notifications, turn off **Use native notification
 On other distros, apply the patch to the release tarball and build as usual. You'll need `layer-shell-qt` and `wayland-client` development files:
 
 ```bash
-patch -Np1 -d tdesktop-7.3.1-full -i wayland-notifications.patch
+patch -Np1 -d tdesktop-7.3.2-full -i wayland-notifications.patch
 ```
 
 ## How it works
