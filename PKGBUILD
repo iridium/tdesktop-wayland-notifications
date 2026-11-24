@@ -3,7 +3,7 @@
 
 pkgname=telegram-desktop-wayland-notifications
 _pkgname=telegram-desktop
-pkgver=7.4.4
+pkgver=7.4.6
 _td_commit=c15d3f5a5de6e3ba5839822c451152e5e18bb700
 _wallet_engine_ver=0.0.7
 pkgrel=2
@@ -13,7 +13,6 @@ url="https://github.com/iridium/tdesktop-wayland-notifications"
 license=('GPL-3.0-or-later WITH OpenSSL-exception')
 depends=(
   'abseil-cpp'
-  'ada'
   'cairo'
   'ffmpeg'
   'fontconfig'
@@ -83,8 +82,9 @@ makedepends=(
 provides=("${_pkgname}=${pkgver}")
 conflicts=("${_pkgname}")
 optdepends=(
-  'geoclue: geoinformation support'
   'crow-translate: translation provider'
+  'enchant: system spellcheck dictionaries support'
+  'geoclue: geoinformation support'
   'webkit2gtk-4.1: embedded browser features provided by webkit2gtk-4.1 (gtk3)'
   'webkitgtk-6.0: embedded browser features provided by webkitgtk-6.0 (gtk4)'
   'xdg-desktop-portal: desktop integration'
@@ -97,10 +97,10 @@ source=(
   https://github.com/desktop-app/patches/raw/refs/heads/master/wallet-engine.patch
   "wayland-notifications.patch"
 )
-sha512sums=('fc597cf9a04edd6228fc06503ca11a37590f4bc423612137ea1a953206c01da33cc8fa8177956f5175922ce848939f64166f4a12a9e07a3824731906549088de'
+sha512sums=('26b4ec54c7508d17806e0579cc4a641179d0957b4dfcdbdb02980f3d1dc46f3dab89756d0ff91fe4d78b70fb1c88e5a961434b22897ffdefde863f09f150d485'
             'dd4741b3621c5e76ba7c9eee44ffd41b1e6b6c24fdb19988efd780d307aff79a9dcfd710be9ad63db6857cbbd71c273c54d82be524a5326fc22f1233d9eb6ca2'
             'f1a38de20459c5b780c98aaab037fdf34357980e7f3b93c4b523636d016ca4ffc9d9679c2ee4a246b138ef0474b8190d2db1874b204c006b0f30b3c950c62ff6'
-            '71c9b0aacef42e87febee042d251c2835e3d30b8000f9b00afb48d74a7e7aba93a36530c1ef0d6da69bb4d115e7a852a8888f1bcf868d1bd60d9e3f55a024088'
+            '02a56630652d9fbf80a78a4aba46d64a6a32cc9768dab8465a5ede75686895d10716b9ade03957eefdbec50abb4d93788352bf507f782a7e9b9f890ff2eca91d'
             '71536c7936902c49487acf686fc9a8e13803e3202caf5aa472d2b0de82a5951ce8df37ec917e16770bb40f50defdb85377f39ce8b3018cd71d668364981b3e9b')
 
 prepare() {
@@ -137,6 +137,7 @@ build() {
   cmake -B build -S tdesktop-$pkgver-full -G Ninja \
     -DCMAKE_VERBOSE_MAKEFILE=ON \
     -DCMAKE_INSTALL_PREFIX="/usr" \
+    -DCMAKE_INSTALL_LIBEXECDIR=lib \
     -Dtde2e_DIR="$PWD/td/install/lib/cmake/tde2e" \
     -DCMAKE_PREFIX_PATH="$PWD/wallet-engine-${_wallet_engine_ver}/install" \
     -DCMAKE_BUILD_TYPE=None \
